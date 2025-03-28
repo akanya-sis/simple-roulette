@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>ルーレットアプリ</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      margin: 20px;
+    }
+    #app-container {
+      display: flex;
+      flex-direction: row;
+      justify-content: space-between;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    /* 左側：ルーレットと操作ボタン */
+    #roulette-section {
+      flex: 1;
+      text-align: center;
+    }
+    #wheelCanvas {
+      border: 1px solid #aaa;
+      margin-bottom: 10px;
+    }
+    #spin-btn {
+      font-size: 1.2rem;
+      padding: 10px 20px;
+      cursor: pointer;
+    }
+    /* 右側：項目追加・履歴表示・デバッグ */
+    #settings-section {
+      width: 350px;
+      padding-left: 20px;
+      box-sizing: border-box;
+    }
+    .box {
+      margin-bottom: 20px;
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+    .box h2 {
+      font-size: 1.2rem;
+      margin: 0 0 10px;
+    }
+    #item-list {
+      padding: 0;
+      margin: 0;
+      list-style: none;
+    }
+    #history-list {
+      padding: 0;
+      margin: 0;
+      list-style: none;
+      max-height: 150px;
+      overflow-y: auto;
+    }
+    .item-row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 8px;
+      align-items: center;
+    }
+    .item-row img {
+      max-height: 40px;
+      max-width: 80px;
+      object-fit: contain;
+      margin-right: 10px;
+    }
+    label {
+      margin-right: 5px;
+    }
+    #debug-info {
+      white-space: pre-wrap;
+      background: #f9f9f9;
+      padding: 10px;
+      font-size: 0.9rem;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      display: none; /* デフォルト非表示 */
+    }
+  </style>
+</head>
+<body>
+  <h1>ルーレットアプリ</h1>
+  <div id="app-container">
+    <!-- ルーレット表示セクション -->
+    <div id="roulette-section">
+      <canvas id="wheelCanvas" width="400" height="400"></canvas><br/>
+      <button id="spin-btn">スピン</button>
+    </div>
+    <!-- 設定・項目追加・履歴表示セクション -->
+    <div id="settings-section">
+      <!-- 項目追加ボックス -->
+      <div class="box">
+        <h2>項目追加</h2>
+        <label for="textItem">テキスト</label>
+        <input type="text" id="textItem" placeholder="例: りんご" />
+        <button id="addTextBtn">追加</button><br><br>
+        <label for="imageInput">画像</label>
+        <input type="file" id="imageInput" accept="image/*" />
+        <button id="addImageBtn">追加</button>
+      </div>
+      <!-- 項目一覧 -->
+      <div class="box">
+        <h2>現在の項目</h2>
+        <ul id="item-list"></ul>
+      </div>
+      <!-- 当選履歴表示 -->
+      <div class="box">
+        <h2>当選履歴</h2>
+        <ul id="history-list"></ul>
+      </div>
+      <!-- デバッグモード設定＆デバッグ情報 -->
+      <div class="box">
+        <h2>デバッグ設定</h2>
+        <label for="debugToggle">デバッグモード</label>
+        <input type="checkbox" id="debugToggle" />
+        <div id="debug-info"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // --- グローバル変数 ---
+    let items = [];         // {type: 'text' or 'image', value: '...'(text/base64)}
+    let historyData = [];   // 当選履歴の配列
+    let debugMode = false;  // デバッグモードフラグ
+
+    const canvas = document.getElementById('wheelCanvas');
+    const ctx = canvas.getContext('2d');
+    const spinBtn = document.getElementById('spin-btn');
+    const itemListElem = document.getElementById('item-list');
+    const historyListElem = document.getElementById('history-list');
+    const debugToggle = document.getElementById('debugToggle');
+    const debugInfoElem = document.getElementById('debug-info');
+
+    // ルーレットの角度やアニメーション制御用
+    let currentAngle = 0;      // 現在の角度(0 = 上方向)
+    let spinTimeout = null;    // アニメーションを止めるためのタイマーID
+
+    // --- 初期化処理：LocalStorageからデータを読み込み ---
+    window.onload = () => {
+      loadDataFromStorage();
+      renderItemList();
+      renderHistory();
+      renderWheel();
+      debugToggle.checked = debugMode;
+      updateDebugInfo();
+    };
+
+    // --- LocalStorageへの保存・読み込み ---
+    function saveDataToStorage() {
+      localStorage.setItem('roulette_items', JSON.stringify(items));
+      localStorage.setItem('roulette_history', JSON.stringify(historyData));
+      localStorage.setItem('roulette_debug', JSON.stringify(debugMode));
+    }
+    function loadDataFromStorage() {
+      const itemsData = localStorage.getItem('roulette_items');
+      const historyDataStr = localStorage.getItem('roulette_history');
+      const debugDataStr = localStorage.getItem('roulette_debug');
+
+      if (itemsData) {
+        items = JSON.parse(itemsData);
+      }
+      if (historyDataStr) {
+        historyData = JSON.parse(historyDataStr);
+      }
+      if (debugDataStr) {
+        debugMode = JSON.parse(debugDataStr);
+      }
+    }
+
+    // --- ルーレット描画 ---
+    function renderWheel() {
+      const width = canvas.width;
+      const height = canvas.height;
+      const centerX = width / 2;
+      const centerY = height / 2;
+      const arc = (2 * Math.PI) / (items.length || 1);
+
+      // キャンバス初期化
+      ctx.clearRect(0, 0, width, height);
+
+      if (items.length === 0) {
+        // 項目がない時は何も描かない
+        ctx.font = '20px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('項目がありません', centerX, centerY);
+        return;
+      }
+
+      // 各セクションを描画
+      for (let i = 0; i < items.length; i++) {
+        const startAngle = currentAngle + i * arc;
+        const endAngle = startAngle + arc;
+
+        // セクション塗り
+        ctx.beginPath();
+        ctx.moveTo(centerX, centerY);
+        ctx.arc(centerX, centerY, Math.min(width, height) / 2 - 10, startAngle, endAngle, false);
+        ctx.closePath();
+        // セクションの色(適当)
+        ctx.fillStyle = `hsl(${(360 / items.length) * i}, 70%, 70%)`;
+        ctx.fill();
+
+        // テキストや画像を表示する角度
+        const textAngle = startAngle + arc / 2;
+        ctx.save();
+        ctx.translate(centerX, centerY);
+        ctx.rotate(textAngle);
+        ctx.textAlign = 'left';
+        ctx.fillStyle = '#000';
+
+        // 項目が画像かテキストかで処理を分ける
+        if (items[i].type === 'text') {
+          ctx.font = '16px sans-serif';
+          ctx.fillText(items[i].value, Math.min(width, height) / 2 - 50, 0);
+        } else if (items[i].type === 'image') {
+          // 画像の場合
+          const img = new Image();
+          img.src = items[i].value; // base64画像
+          // 即座に描画が必要な場合はonloadを待つ
+          img.onload = () => {
+            ctx.save();
+            ctx.drawImage(
+              img,
+              Math.min(width, height) / 2 - 60, // x
+              -30,                             // y
+              60,                              // width
+              60                               // height
+            );
+            ctx.restore();
+          };
+        }
+        ctx.restore();
+      }
+    }
+
+    // --- スピンボタン動作 ---
+    spinBtn.addEventListener('click', () => {
+      if (items.length === 0) {
+        alert('項目がありません。追加してください。');
+        return;
+      }
+      startSpin();
+    });
+
+    function startSpin() {
+      // ランダム回転角度(最終的にどこに止まるか)
+      // 何周かするために(2π * ランダム周回数) + ランダム位置
+      const randomFactor = Math.random();
+      const totalSpins = 5 + Math.floor(Math.random() * 5); // 5~9周くらい
+      const targetAngle = 2 * Math.PI * totalSpins + 2 * Math.PI * randomFactor;
+
+      if (debugMode) {
+        console.log('[DEBUG] randomFactor:', randomFactor);
+        console.log('[DEBUG] totalSpins:', totalSpins);
+        console.log('[DEBUG] targetAngle:', targetAngle);
+      }
+
+      let start = null;
+      const duration = 3000; // スピン演出 3秒
+
+      function animateSpin(timestamp) {
+        if (!start) start = timestamp;
+        const elapsed = timestamp - start;
+
+        // easeOut演算(徐々に減速)
+        const progress = Math.min(elapsed / duration, 1);
+        const easeOut = 1 - Math.pow(1 - progress, 3); // キュービック
+
+        const current = easeOut * targetAngle;
+        currentAngle = current; // グローバル角度更新
+        renderWheel();
+
+        if (progress < 1) {
+          spinTimeout = requestAnimationFrame(animateSpin);
+        } else {
+          // スピン終了
+          cancelAnimationFrame(spinTimeout);
+          spinTimeout = null;
+          finishSpin(targetAngle);
+        }
+      }
+      spinTimeout = requestAnimationFrame(animateSpin);
+    }
+
+    function finishSpin(finalAngle) {
+      // finalAngleから当選項目を求める
+      const arc = (2 * Math.PI) / items.length;
+      // ルーレットの角度は上方向が0。そのためfinalAngleを 2π で正規化
+      const normalizedAngle = finalAngle % (2 * Math.PI);
+      // セクションのインデックスを計算(上方向をセクション0と想定)
+      const index = Math.floor(((2 * Math.PI - normalizedAngle + arc / 2) % (2 * Math.PI)) / arc);
+
+      const resultItem = items[index];
+      alert(`当選: ${resultItem.type === 'text' ? resultItem.value : '画像'} `);
+
+      // 当選履歴に追加
+      const timestamp = new Date().toLocaleString();
+      historyData.unshift({
+        time: timestamp,
+        type: resultItem.type,
+        value: resultItem.value
+      });
+      renderHistory();
+      saveDataToStorage();
+
+      if (debugMode) {
+        console.log('[DEBUG] 当選インデックス:', index);
+        console.log('[DEBUG] 当選項目:', resultItem);
+        updateDebugInfo();
+      }
+    }
+
+    // --- 項目追加(テキスト) ---
+    const addTextBtn = document.getElementById('addTextBtn');
+    const textItemInput = document.getElementById('textItem');
+    addTextBtn.addEventListener('click', () => {
+      const textValue = textItemInput.value.trim();
+      if (textValue) {
+        items.push({ type: 'text', value: textValue });
+        textItemInput.value = '';
+        renderItemList();
+        renderWheel();
+        saveDataToStorage();
+      }
+    });
+
+    // --- 項目追加(画像) ---
+    const addImageBtn = document.getElementById('addImageBtn');
+    const imageInput = document.getElementById('imageInput');
+    addImageBtn.addEventListener('click', () => {
+      if (imageInput.files && imageInput.files[0]) {
+        const file = imageInput.files[0];
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          // base64に変換し、itemsに追加
+          items.push({ type: 'image', value: e.target.result });
+          renderItemList();
+          renderWheel();
+          saveDataToStorage();
+        };
+        reader.readAsDataURL(file);
+        imageInput.value = null; // ファイル選択をクリア
+      }
+    });
+
+    // --- 項目一覧の表示 ---
+    function renderItemList() {
+      itemListElem.innerHTML = '';
+      items.forEach((item, index) => {
+        const li = document.createElement('li');
+        li.className = 'item-row';
+
+        if (item.type === 'text') {
+          li.textContent = item.value;
+        } else {
+          const img = document.createElement('img');
+          img.src = item.value;
+          li.appendChild(img);
+        }
+
+        // 削除ボタン
+        const delBtn = document.createElement('button');
+        delBtn.textContent = '削除';
+        delBtn.onclick = () => {
+          items.splice(index, 1);
+          renderItemList();
+          renderWheel();
+          saveDataToStorage();
+        };
+        li.appendChild(delBtn);
+        itemListElem.appendChild(li);
+      });
+    }
+
+    // --- 当選履歴の表示 ---
+    function renderHistory() {
+      historyListElem.innerHTML = '';
+      historyData.forEach((h) => {
+        const li = document.createElement('li');
+        const timeSpan = document.createElement('span');
+        timeSpan.textContent = `[${h.time}] `;
+
+        if (h.type === 'text') {
+          li.textContent = h.value;
+        } else {
+          const img = document.createElement('img');
+          img.src = h.value;
+          li.appendChild(img);
+        }
+
+        li.prepend(timeSpan);
+        historyListElem.appendChild(li);
+      });
+    }
+
+    // --- デバッグモード切り替え ---
+    debugToggle.addEventListener('change', () => {
+      debugMode = debugToggle.checked;
+      saveDataToStorage();
+      updateDebugInfo();
+    });
+
+    function updateDebugInfo() {
+      if (!debugMode) {
+        debugInfoElem.style.display = 'none';
+        debugInfoElem.textContent = '';
+        return;
+      }
+      debugInfoElem.style.display = 'block';
+      debugInfoElem.textContent = `items: ${JSON.stringify(items, null, 2)}\n`
+                                + `historyData: ${JSON.stringify(historyData, null, 2)}\n`
+                                + `currentAngle: ${currentAngle}\n`;
+    }
+  </script>
+</body>
+</html>
