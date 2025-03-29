@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>ルーレットアプリ (localforage + ポインタ + モーダル)</title>
+  <title>ルーレットアプリ (canvasポインタ・履歴画像160px固定)</title>
   <!-- localforageライブラリを読み込み (CDN) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/localforage/1.10.0/localforage.min.js"></script>
   <style>
@@ -17,12 +17,11 @@
       max-width: 1200px;
       margin: 0 auto;
     }
+    /* 左側：ルーレットキャンバス */
     #roulette-section {
       flex: 1;
       text-align: center;
-      position: relative; /* ポインタを重ねるために必要 */
     }
-    /* ルーレットキャンバス */
     #wheelCanvas {
       border: 1px solid #aaa;
       margin-bottom: 10px;
@@ -30,29 +29,14 @@
       display: block;
       margin: 0 auto;
     }
-    /* 三角ポインタ */
-    #pointer {
-      position: absolute;
-      left: 50%;
-      top: 0;
-      transform: translateX(-50%);
-      width: 0;
-      height: 0;
-      border-left: 15px solid transparent;
-      border-right: 15px solid transparent;
-      border-bottom: 20px solid red;
-      /* Canvasの上端あたりに置きたい場合は以下調整 */
-      margin-top: 10px; 
-      z-index: 10;
-    }
-
     #spin-btn {
       font-size: 1.2rem;
       padding: 10px 20px;
       cursor: pointer;
       margin-top: 20px;
     }
-    /* 設定・項目追加・履歴 */
+
+    /* 右側：項目追加・履歴表示・デバッグ */
     #settings-section {
       width: 350px;
       padding-left: 20px;
@@ -68,7 +52,8 @@
       font-size: 1.2rem;
       margin: 0 0 10px;
     }
-    #item-list, #history-list {
+    #item-list,
+    #history-list {
       padding: 0;
       margin: 0;
       list-style: none;
@@ -85,7 +70,9 @@
       object-fit: contain;
       margin-right: 10px;
     }
-    label { margin-right: 5px; }
+    label {
+      margin-right: 5px;
+    }
     #debug-info {
       white-space: pre-wrap;
       background: #f9f9f9;
@@ -96,7 +83,7 @@
       display: none; /* デフォルト非表示 */
     }
 
-    /* --- モーダル --- */
+    /* --- モーダルウィンドウ --- */
     #modal-overlay {
       position: fixed;
       top: 0; left: 0;
@@ -133,7 +120,7 @@
 <body>
   <h1>ルーレットアプリ</h1>
 
-  <!-- モーダル (オーバーレイ + 内容) -->
+  <!-- モーダル -->
   <div id="modal-overlay">
     <div id="result-modal">
       <button id="modal-close-btn">×</button>
@@ -144,11 +131,7 @@
   <div id="app-container">
     <!-- ルーレット表示セクション -->
     <div id="roulette-section">
-      <!-- 三角ポインタ -->
-      <div id="pointer"></div>
-      <!-- キャンバス -->
       <canvas id="wheelCanvas" width="400" height="400"></canvas>
-      <!-- スピンボタン -->
       <button id="spin-btn">スピン</button>
     </div>
 
@@ -188,12 +171,12 @@
   </div>
 
   <script>
-    // localforageのインスタンスを設定 (キーPrefixなど任意)
+    // localforageの初期設定
     localforage.config({
       name: 'myRouletteApp'
     });
 
-    // データを保存するキー名
+    // データ保存キー
     const ITEMS_KEY   = 'roulette_items';
     const HISTORY_KEY = 'roulette_history';
     const DEBUG_KEY   = 'roulette_debug';
@@ -203,26 +186,25 @@
     let historyData = []; // [{ time: string, type: 'text'|'image', value: string }, ...]
     let debugMode   = false;
 
-    const canvas  = document.getElementById('wheelCanvas');
-    const ctx     = canvas.getContext('2d');
-    const spinBtn = document.getElementById('spin-btn');
+    const canvas    = document.getElementById('wheelCanvas');
+    const ctx       = canvas.getContext('2d');
+    const spinBtn   = document.getElementById('spin-btn');
 
     const itemListElem    = document.getElementById('item-list');
     const historyListElem = document.getElementById('history-list');
     const debugToggle     = document.getElementById('debugToggle');
     const debugInfoElem   = document.getElementById('debug-info');
 
-    // モーダル
-    const modalOverlay   = document.getElementById('modal-overlay');
-    const modalCloseBtn  = document.getElementById('modal-close-btn');
-    const modalContent   = document.getElementById('modal-content');
+    // モーダル関連
+    const modalOverlay  = document.getElementById('modal-overlay');
+    const modalCloseBtn = document.getElementById('modal-close-btn');
+    const modalContent  = document.getElementById('modal-content');
 
-    let currentAngle  = 0; // ルーレットの現在角度
-    let spinTimeout   = null;
+    let currentAngle = 0; // ルーレットの回転角度
+    let spinTimeout  = null;
 
-    // --- ページロード時にデータを読み込み ---
+    // --- 初期化：IndexedDB (localforage) から読み込み ---
     window.onload = () => {
-      // localforageからまとめて読み込み (Promiseを使ってチェーンする例)
       localforage.getItem(ITEMS_KEY)
         .then(storedItems => {
           if (storedItems) items = storedItems;
@@ -234,11 +216,11 @@
         })
         .then(storedDebug => {
           if (storedDebug) debugMode = storedDebug;
-          // 画像タイプのitemsを再プリロード
+          // 画像typeを再プリロード
           items.forEach(item => {
             if (item.type === 'image') {
               const img = new Image();
-              img.src = item.value;
+              img.src   = item.value;
               item.imageObj = img;
               item.loaded   = false;
               img.onload = () => {
@@ -249,7 +231,6 @@
           });
         })
         .finally(() => {
-          // 一通り読み込んだらUIを反映
           renderItemList();
           renderHistory();
           debugToggle.checked = debugMode;
@@ -258,15 +239,14 @@
         });
     };
 
-    // --- localforageへ保存 ---
+    // --- データ保存用関数 ---
     function saveItems() {
-      // itemsを保存
       localforage.setItem(ITEMS_KEY, items).catch(err => {
         console.error('Failed to save items:', err);
       });
     }
     function saveHistory() {
-      // 履歴が多くなりすぎないように最大20件に制限
+      // 履歴が多い場合は古いものをカット（例: 20件）
       if (historyData.length > 20) {
         historyData = historyData.slice(0, 20);
       }
@@ -290,39 +270,38 @@
       ctx.clearRect(0, 0, width, height);
 
       if (items.length === 0) {
-        ctx.font = '20px sans-serif';
+        ctx.font      = '20px sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText('項目がありません', centerX, centerY);
         return;
       }
 
-      // 1セクションの角度
+      // セクションあたりの角度
       const sliceAngle = (2 * Math.PI) / items.length;
 
-      // 各セクションを描画
+      // スライスを順に描画
       for (let i = 0; i < items.length; i++) {
         const startAngle = currentAngle + i * sliceAngle;
         const endAngle   = startAngle + sliceAngle;
 
-        // セクション塗り
+        // 扇形を描く
         ctx.beginPath();
         ctx.moveTo(centerX, centerY);
-        ctx.arc(centerX, centerY, Math.min(width, height)/2 - 10, startAngle, endAngle);
+        ctx.arc(centerX, centerY, Math.min(width, height) / 2 - 10, startAngle, endAngle);
         ctx.closePath();
         ctx.fillStyle = `hsl(${(360 / items.length) * i}, 70%, 70%)`;
         ctx.fill();
 
-        // スライス中心角度
-        const textAngle = startAngle + sliceAngle/2;
+        // セクション中央角度
+        const midAngle = startAngle + sliceAngle / 2;
 
-        // テキスト/画像を外周寄りに描画
+        // テキスト/画像
         ctx.save();
         ctx.translate(centerX, centerY);
-        ctx.rotate(textAngle);
+        ctx.rotate(midAngle);
 
-        const radius = Math.min(width, height)/2 - 60; // テキスト/画像を配置する半径
-
-        const item = items[i];
+        const radius = Math.min(width, height)/2 - 60;  // 描画位置
+        const item   = items[i];
         if (item.type === 'text') {
           ctx.font      = '16px sans-serif';
           ctx.fillStyle = '#000';
@@ -334,15 +313,37 @@
             ctx.drawImage(item.imageObj, radius - imgW/2, -imgH/2, imgW, imgH);
           }
         }
-
         ctx.restore();
       }
+
+      // --- ポインタ（canvas上に三角を固定表示） ---
+      drawPointer();
     }
 
-    // ポインタ（HTML/CSSで三角形を用意）のため、別途キャンバス上に描画はしない  
-    // もしキャンバスに直接三角を描きたい場合はここで ctx の描画を行う
+    // ポインタをルーレットの上端に描画
+    function drawPointer() {
+      const width   = canvas.width;
+      const height  = canvas.height;
+      const centerX = width / 2;
+      const centerY = height / 2;
 
-    // --- スピン開始 ---
+      // ルーレットの外周よりちょっと内側に三角を配置する
+      const r        = Math.min(width, height)/2;
+      const tipX     = centerX;
+      const tipY     = centerY - r + 10;  // 上から10px下げた位置を頂点に
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(tipX, tipY);
+      ctx.lineTo(tipX - 15, tipY + 30);
+      ctx.lineTo(tipX + 15, tipY + 30);
+      ctx.closePath();
+      ctx.fillStyle = 'red';
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // --- スピン ---
     spinBtn.addEventListener('click', () => {
       if (items.length === 0) {
         alert('項目がありません。追加してください。');
@@ -358,15 +359,14 @@
       const targetAngle  = 2 * Math.PI * totalSpins + 2 * Math.PI * randomFactor;
 
       let startTime = null;
-      const duration = 3000; // 3秒アニメーション
+      const duration = 3000; // 3秒
 
       function animateSpin(timestamp) {
         if (!startTime) startTime = timestamp;
         const elapsed = timestamp - startTime;
 
         const progress = Math.min(elapsed / duration, 1);
-        // ease-out
-        const easeOut  = 1 - Math.pow((1 - progress), 3);
+        const easeOut  = 1 - Math.pow(1 - progress, 3);
 
         currentAngle = easeOut * targetAngle;
         renderWheel();
@@ -379,17 +379,20 @@
           finishSpin(targetAngle);
         }
       }
+
       spinTimeout = requestAnimationFrame(animateSpin);
     }
 
     function finishSpin(finalAngle) {
-      const sliceAngle    = (2 * Math.PI) / items.length;
-      const normalized    = finalAngle % (2 * Math.PI);
-      const index         = Math.floor(((2 * Math.PI - normalized + sliceAngle/2) % (2 * Math.PI)) / sliceAngle);
-      const resultItem    = items[index];
-      const timestamp     = new Date().toLocaleString();
+      // 当選項目を特定
+      const sliceAngle  = (2 * Math.PI) / items.length;
+      const normalized  = finalAngle % (2 * Math.PI);
+      const index = Math.floor(((2 * Math.PI - normalized + sliceAngle / 2) % (2 * Math.PI)) / sliceAngle);
 
-      // 履歴に追加 (先頭に)
+      const resultItem = items[index];
+      const timestamp  = new Date().toLocaleString();
+
+      // 履歴に追加（先頭に）
       historyData.unshift({
         time: timestamp,
         type: resultItem.type,
@@ -403,13 +406,12 @@
         updateDebugInfo();
       }
 
-      // モーダルで当選結果を表示
+      // モーダルで表示
       showResultModal(resultItem);
     }
 
-    // --- モーダル ---
+    // --- モーダル操作 ---
     function showResultModal(item) {
-      // 中身をクリア
       modalContent.innerHTML = '';
 
       if (item.type === 'text') {
@@ -424,15 +426,14 @@
         modalContent.appendChild(p);
         modalContent.appendChild(img);
       }
-      // モーダルを表示
       modalOverlay.style.display = 'flex';
     }
     modalCloseBtn.addEventListener('click', () => {
       modalOverlay.style.display = 'none';
     });
 
-    // --- 項目追加(テキスト) ---
-    const addTextBtn   = document.getElementById('addTextBtn');
+    // --- テキスト項目追加 ---
+    const addTextBtn    = document.getElementById('addTextBtn');
     const textItemInput = document.getElementById('textItem');
     addTextBtn.addEventListener('click', () => {
       const textValue = textItemInput.value.trim();
@@ -445,39 +446,34 @@
       saveItems();
     });
 
-    // --- 項目追加(画像) ---
+    // --- 画像項目追加 ---
     const addImageBtn = document.getElementById('addImageBtn');
     const imageInput  = document.getElementById('imageInput');
     addImageBtn.addEventListener('click', () => {
       if (imageInput.files && imageInput.files[0]) {
-        const file   = imageInput.files[0];
+        const file = imageInput.files[0];
         const reader = new FileReader();
         reader.onload = e => {
-          // base64文字列を取得
           const base64Data = e.target.result;
 
-          // 新しいItemを作り、画像オブジェクトを生成
-          const img   = new Image();
-          img.src     = base64Data;
+          const img = new Image();
+          img.src   = base64Data;
           const newItem = { type: 'image', value: base64Data, imageObj: img, loaded: false };
-
-          // 読み込み完了後フラグを立てて再描画
           img.onload = () => {
             newItem.loaded = true;
             renderWheel();
           };
           items.push(newItem);
 
-          // UI更新
           renderItemList();
           saveItems();
         };
         reader.readAsDataURL(file);
-        imageInput.value = ''; // リセット
+        imageInput.value = '';
       }
     });
 
-    // --- 項目一覧を描画 ---
+    // --- 項目一覧描画 ---
     function renderItemList() {
       itemListElem.innerHTML = '';
       items.forEach((item, index) => {
@@ -501,12 +497,11 @@
           saveItems();
         };
         li.appendChild(delBtn);
-
         itemListElem.appendChild(li);
       });
     }
 
-    // --- 当選履歴を描画 ---
+    // --- 当選履歴描画（画像を160pxに固定） ---
     function renderHistory() {
       historyListElem.innerHTML = '';
       historyData.forEach(h => {
@@ -521,7 +516,9 @@
         } else {
           const img = document.createElement('img');
           img.src = h.value;
-          img.width = 160;
+          // 画像サイズを幅160px固定、高さ自動
+          img.style.width = '160px';
+          img.style.height = 'auto';
           li.appendChild(img);
         }
         historyListElem.appendChild(li);
