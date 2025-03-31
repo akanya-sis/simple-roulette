@@ -67,7 +67,9 @@
       <button id="addTextBtn">テキスト追加</button>
     </div>
     <div style="margin-top:10px;">
+      <!-- ▼ 画像用のテキスト入力を追加 ▼ -->
       <input type="file" id="imgInput" accept="image/*" />
+      <input type="text" id="imgLabel" placeholder="画像に紐づく文字 (任意)" />
       <button id="addImgBtn">画像追加</button>
     </div>
     <hr/>
@@ -88,8 +90,11 @@
   const HISTORY_KEY = 'roulette_history';
 
   // --- データ ---
-  let items = [];       // [{type, value, imageObj?:Image, loaded?:bool}, ...]
-  let historyData = []; // [{time, type, value}, ...]
+  // 画像にも文字(ラベル)が付与できるように
+  // { type:'text', value:'テキスト内容' }
+  // { type:'image', value:'Base64画像', label:'紐づく文字', imageObj:Image, loaded:bool }
+  let items = [];
+  let historyData = []; // [{time, type, value, (label?)}]
 
   // --- DOM要素 ---
   const canvas  = document.getElementById('wheelCanvas');
@@ -98,11 +103,14 @@
 
   const textItem   = document.getElementById('textItem');
   const addTextBtn = document.getElementById('addTextBtn');
-  const imgInput   = document.getElementById('imgInput');
-  const addImgBtn  = document.getElementById('addImgBtn');
-  const itemListDiv= document.getElementById('itemList');
 
-  const historyList = document.getElementById('historyList');
+  // ▼ 画像関連のテキスト要素を追加 ▼
+  const imgInput   = document.getElementById('imgInput');
+  const imgLabel   = document.getElementById('imgLabel');
+  const addImgBtn  = document.getElementById('addImgBtn');
+
+  const itemListDiv= document.getElementById('itemList');
+  const historyList= document.getElementById('historyList');
 
   // モーダル
   const modalOverlay  = document.getElementById('modalOverlay');
@@ -127,7 +135,14 @@
   //      IndexedDB関連
   // ======================
   function saveItemsToDB() {
-    const storable = items.map(it => ({ type: it.type, value: it.value }));
+    // ▼ imageタイプの場合は label も保存する ▼
+    const storable = items.map(it => {
+      if(it.type === 'text') {
+        return { type:'text', value: it.value };
+      } else {
+        return { type:'image', value: it.value, label: it.label };
+      }
+    });
     localforage.setItem(ITEMS_KEY, storable).catch(console.error);
   }
   function loadItemsFromDB() {
@@ -135,12 +150,17 @@
       if (!stored) return;
       items = stored.map(s => {
         if (s.type === 'text') {
-          return { type:'text', value:s.value };
+          return { type:'text', value: s.value };
         } else {
-          // 画像
           const img = new Image();
           img.src   = s.value;
-          const obj = { type:'image', value:s.value, imageObj:img, loaded:false };
+          const obj = {
+            type:'image',
+            value: s.value,
+            label: s.label || '', // labelがなければ空文字
+            imageObj: img,
+            loaded: false
+          };
           img.onload = () => { obj.loaded = true; renderWheel(); };
           return obj;
         }
@@ -290,10 +310,12 @@
     
     console.log("sliceAngle=",sliceAngle, ", normalized=",normalized, ", diff=", diff, ", index=",index);
     
+    // ▼ historyにも labelを保持できるように変更 ▼
     historyData.unshift({
       time: now,
       type: resultItem.type,
-      value: resultItem.value
+      value: resultItem.value,
+      label: (resultItem.label || '')
     });
     renderHistory();
     saveHistoryToDB();
@@ -319,6 +341,12 @@
         txt.textContent=h.value;
         li.appendChild(txt);
       } else {
+        // ▼ labelがあれば表示する ▼
+        if(h.label) {
+          const labelDiv = document.createElement('div');
+          labelDiv.textContent = h.label;
+          li.appendChild(labelDiv);
+        }
         const img=document.createElement('img');
         img.src=h.value;
         li.appendChild(img);
@@ -327,6 +355,7 @@
     });
   }
 
+  // ▼ モーダル表示時に画像もラベルも表示する ▼
   function showResultModal(item) {
     modalContent.innerHTML='';
     if(item.type==='text') {
@@ -335,7 +364,12 @@
       modalContent.appendChild(p);
     } else {
       const p=document.createElement('p');
-      p.textContent='当選（画像）';
+      // labelがあればラベルを表示、なければ従来どおり
+      if(item.label) {
+        p.textContent = `当選: ${item.label}`;
+      } else {
+        p.textContent = '当選（画像）';
+      }
       const img=document.createElement('img');
       img.src=item.value;
       modalContent.appendChild(p);
@@ -359,22 +393,38 @@
     renderWheel();
     saveItemsToDB();
   });
+
+  // ▼ 画像にひもづく文字も登録できるように変更 ▼
   addImgBtn.addEventListener('click', () => {
     if(!imgInput.files || !imgInput.files[0]) return;
-    const file=imgInput.files[0];
-    const reader=new FileReader();
-    reader.onload=e=>{
-      const base64=e.target.result;
-      const img=new Image();
-      img.src=base64;
-      const newItem={type:'image', value:base64, imageObj:img, loaded:false};
-      img.onload=()=>{newItem.loaded=true;renderWheel();};
+    const file = imgInput.files[0];
+    const labelVal = imgLabel.value.trim(); // 画像に紐づく文字（任意）
+    const reader = new FileReader();
+
+    reader.onload = e => {
+      const base64 = e.target.result;
+      const img = new Image();
+      img.src = base64;
+      const newItem = {
+        type: 'image',
+        value: base64,
+        label: labelVal,  // ラベルをセット
+        imageObj: img,
+        loaded: false
+      };
+      img.onload = () => {
+        newItem.loaded = true;
+        renderWheel();
+      };
       items.push(newItem);
       renderItemList();
       saveItemsToDB();
     };
     reader.readAsDataURL(file);
+
+    // 入力リセット
     imgInput.value='';
+    imgLabel.value='';
   });
 
   function renderItemList() {
@@ -386,6 +436,13 @@
       if(it.type==='text') {
         row.textContent=it.value;
       } else {
+        // 画像 + ラベル
+        // ラベルがあれば先に表示
+        if(it.label){
+          const labelSpan = document.createElement('span');
+          labelSpan.textContent = it.label + ' / ';
+          row.appendChild(labelSpan);
+        }
         const img=document.createElement('img');
         img.src=it.value;
         row.appendChild(img);
