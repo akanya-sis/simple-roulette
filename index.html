@@ -214,21 +214,26 @@
     drawPointer();
   }
 
-  function drawPointer() {
+　function drawPointer() {
     const w = canvas.width, h = canvas.height;
-    const cx= w/2, cy= h/2;
-    const radius = Math.min(w,h)/2 - 10;
-    // 上端より少し上に頂点
+    const cx = w / 2, cy = h / 2;
+    const radius = Math.min(w, h) / 2 - 10;
+  
+    // 下端より少し下に先端を配置する
     const apexX = cx;
-    const apexY = cy - radius - 5;
+    const apexY = cy + radius + 5;  // 中心+半径よりさらに5px下
 
     ctx.save();
     ctx.beginPath();
+    // 先端(底辺ではなく、下に尖った部分)を apex とする
     ctx.moveTo(apexX, apexY);
-    ctx.lineTo(apexX - 10, apexY + 20);
-    ctx.lineTo(apexX + 10, apexY + 20);
+  
+    // 左上と右上に広がるように線を引く
+    ctx.lineTo(apexX - 10, apexY - 20);
+    ctx.lineTo(apexX + 10, apexY - 20);
+  
     ctx.closePath();
-    ctx.fillStyle='red';
+    ctx.fillStyle = 'red';
     ctx.fill();
     ctx.restore();
   }
@@ -266,40 +271,43 @@
   }
 
   // --- finishSpin: ポインタを「上」にする ---
-function finishSpin(finalAngle) {
-  // 1スライスあたりのラジアン幅
-  const sliceAngle = 2 * Math.PI / items.length;
-
-  // finalAngle を 0～2π の範囲に正規化
-  const normalized = finalAngle % (2 * Math.PI);
-
-  // angle=0 は Canvas 的には「右」向き。
-  // しかし本当に「上向き」を基準（0ラジアン）にしたい場合、
-  // 「上向き = 3π/2」だったものを 0 に合わせる → 実質的に +π/2 シフトする。
-  const measure = (normalized + Math.PI / 2) % (2 * Math.PI);
-
-  // sliceAngle/2 を足して "スライスの区切りの真ん中" で判定
-  const index = Math.floor((measure + sliceAngle / 2) / sliceAngle);
-
-  // 当選アイテムを取り出し
-  const resultItem = items[index];
-
-  // 当選履歴に保存
-  const now = new Date().toLocaleString();
-  historyData.unshift({
-    time: now,
-    type: resultItem.type,
-    value: resultItem.value
-  });
-
-  // 画面に反映 + DB保存
-  renderHistory();
-  saveHistoryToDB();
-
-  // モーダルで結果表示
-  showResultModal(resultItem);
-}
-
+  function finishSpin(finalAngle) {
+    // スライスあたりの角度
+    const sliceAngle = 2 * Math.PI / items.length;
+    // 0～2πの範囲に正規化
+    const normalized = finalAngle % (2 * Math.PI);
+  
+    // Canvas標準では
+    //   0ラジアン = 右
+    //   π/2       = 下
+    //   π         = 左
+    //   3π/2      = 上
+    //
+    // つまり「上向き」が 3π/2 なので、そこを “0” 扱いにしたければ
+    //   measure = (normalized - 3π/2) を 0～2π に収めればよい
+    //
+    // ※ (… + 2*Math.PI) % (2*Math.PI) はマイナス値回避のため
+    const measure = (normalized - (3 * Math.PI) / 2 + 2 * Math.PI) % (2 * Math.PI);
+  
+    // 境界の中心をとるために sliceAngle/2 を加算してからスライスを割り出す
+    const index = Math.floor((measure + sliceAngle / 2) / sliceAngle);
+  
+    // 当選したアイテムを取得
+    const resultItem = items[index];
+  
+    // 履歴に追加
+    const now = new Date().toLocaleString();
+    historyData.unshift({
+      time: now,
+      type: resultItem.type,
+      value: resultItem.value
+    });
+    renderHistory();
+    saveHistoryToDB();
+  
+    // 結果をモーダル表示
+    showResultModal(resultItem);
+  }
 
   // ======================
   //    当選履歴 + モーダル
