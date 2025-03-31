@@ -181,7 +181,7 @@
 
     // スライスを描画
     for (let i=0; i<items.length; i++) {
-      const start = currentAngle + i* sliceAngle;
+      const start = currentAngle + i * sliceAngle;
       const end   = start + sliceAngle;
       ctx.beginPath();
       ctx.moveTo(cx, cy);
@@ -210,11 +210,12 @@
       ctx.restore();
     }
 
-    // 下向き三角ポインタ（円の上側）
+    // 下向き三角ポインタ（円の下側）
     drawPointer();
   }
 
-　function drawPointer() {
+  // 下側にある赤い三角形ポインタを描画
+  function drawPointer() {
     const w = canvas.width, h = canvas.height;
     const cx = w / 2, cy = h / 2;
     const radius = Math.min(w, h) / 2 - 10;
@@ -264,13 +265,18 @@
       const easeOut  = 1 - Math.pow(1-progress,3);
       currentAngle   = easeOut * targetAngle;
       renderWheel();
-      if(progress<1) requestAnimationFrame(animate);
-      else finishSpin(targetAngle);
+      if(progress<1) {
+        requestAnimationFrame(animate);
+      } else {
+        finishSpin(targetAngle);
+      }
     }
     requestAnimationFrame(animate);
   }
 
-  // --- finishSpin: ポインタを「上」にする ---
+  // ======================
+  //   スピン終了処理
+  // ======================
   function finishSpin(finalAngle) {
     // スライスあたりの角度
     const sliceAngle = 2 * Math.PI / items.length;
@@ -278,24 +284,18 @@
     const normalized = finalAngle % (2 * Math.PI);
   
     // Canvas標準では
-    //   0ラジアン = 右
-    //   π/2       = 下
-    //   π         = 左
-    //   3π/2      = 上
-    //
-    // つまり「上向き」が 3π/2 なので、そこを “0” 扱いにしたければ
-    //   measure = (normalized - 3π/2) を 0～2π に収めればよい
-    //
-    // ※ (… + 2*Math.PI) % (2*Math.PI) はマイナス値回避のため
+    //   0ラジアン = 右,  π/2 = 下, π = 左, 3π/2 = 上
+    // 「上向き」が 3π/2 なので、そこを 0 扱いに合わせる。
+    // → measure = (normalized - 3π/2 + 2π) % 2π
     const measure = (normalized - (3 * Math.PI) / 2 + 2 * Math.PI) % (2 * Math.PI);
   
-    // 境界の中心をとるために sliceAngle/2 を加算してからスライスを割り出す
+    // sliceAngle/2 を足すことで、区切りの中央で判定
     const index = Math.floor((measure + sliceAngle / 2) / sliceAngle);
   
-    // 当選したアイテムを取得
+    // 当選アイテムを取得
     const resultItem = items[index];
-  
-    // 履歴に追加
+
+    // 結果の反映（履歴・モーダル）
     const now = new Date().toLocaleString();
     historyData.unshift({
       time: now,
@@ -304,9 +304,58 @@
     });
     renderHistory();
     saveHistoryToDB();
-  
-    // 結果をモーダル表示
     showResultModal(resultItem);
+
+    // 最後に、もう一度ルーレット描画 → 判定ラインなどを重ね描き
+    renderWheel();
+    drawFinalIndicator(measure);
+  }
+
+  // ======================
+  //  「どこで判定されたか」可視化する描画
+  // ======================
+  function drawFinalIndicator(measure) {
+    const w = canvas.width;
+    const h = canvas.height;
+    const cx = w/2, cy = h/2;
+    const radius = Math.min(w,h)/2 - 10;
+
+    // 1) 各スライスの「境界線」を薄い青色で表示
+    //    (currentAngle + i*sliceAngle が境界に相当)
+    ctx.save();
+    ctx.strokeStyle = 'rgba(0, 0, 255, 0.4)';
+    const sliceAngle = 2 * Math.PI / items.length;
+    for (let i = 0; i < items.length; i++) {
+      const boundaryAngle = currentAngle + i * sliceAngle;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + radius * Math.cos(boundaryAngle),
+                 cy + radius * Math.sin(boundaryAngle));
+      ctx.stroke();
+    }
+
+    // 2) 「最終確定時の measure (上=0基準)」が
+    //    実際のCanvas座標で何度か → measure + 3π/2 = normalized
+    const actualAngle = (measure + 3 * Math.PI / 2) % (2 * Math.PI);
+
+    // 3) measureに相当する角度に赤いラインを描画
+    ctx.strokeStyle = 'red';
+    ctx.lineWidth   = 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + radius * Math.cos(actualAngle),
+               cy + radius * Math.sin(actualAngle));
+    ctx.stroke();
+
+    // 4) 終点に小さな赤い円を描く
+    ctx.beginPath();
+    ctx.arc(cx + radius * Math.cos(actualAngle),
+            cy + radius * Math.sin(actualAngle),
+            5, 0, 2 * Math.PI);
+    ctx.fillStyle = 'red';
+    ctx.fill();
+
+    ctx.restore();
   }
 
   // ======================
