@@ -2,7 +2,9 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>Canvasポインタ & DataCloneError回避</title>
+  <title>ルーレット (Canvasポインタ & モーダル & DataCloneError回避)</title>
+
+  <!-- localforageライブラリ(CDN) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/localforage/1.10.0/localforage.min.js"></script>
   <style>
     body {
@@ -17,235 +19,385 @@
     #spinBtn {
       display: block;
       margin: 10px auto;
+      padding: 8px 16px;
     }
-    /* モーダルなどのCSS省略 ... */
+
+    /* モーダル */
+    #modal-overlay {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: rgba(0,0,0,0.5);
+      display: none; /* 初期非表示 */
+      justify-content: center;
+      align-items: center;
+      z-index: 9999;
+    }
+    #result-modal {
+      background: #fff;
+      padding: 20px;
+      border-radius: 8px;
+      text-align: center;
+      position: relative;
+      width: 300px;
+    }
+    #modal-close-btn {
+      position: absolute;
+      top: 5px;
+      right: 10px;
+      cursor: pointer;
+      font-size: 1.2rem;
+      border: none;
+      background: transparent;
+    }
+    #modal-content img {
+      max-width: 80px;
+      margin-top: 10px;
+    }
+
+    .box {
+      border: 1px solid #aaa;
+      padding: 10px;
+      margin: 10px auto;
+      width: 400px;
+      border-radius: 4px;
+    }
+    .box h3 {
+      margin-top: 0;
+    }
+    .item-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .item-row img {
+      max-height: 40px;
+      max-width: 80px;
+      margin-right: 10px;
+      object-fit: contain;
+    }
   </style>
 </head>
 <body>
-  <h1>ルーレット(三角ポインタ & エラー回避)</h1>
+  <h1>ルーレットアプリ</h1>
 
+  <!-- Canvas (ルーレット) -->
   <canvas id="wheelCanvas" width="400" height="400"></canvas>
   <button id="spinBtn">スピン</button>
 
-  <div>
-    <h2>項目追加</h2>
+  <!-- モーダル(結果表示) -->
+  <div id="modal-overlay">
+    <div id="result-modal">
+      <button id="modal-close-btn">×</button>
+      <div id="modal-content"></div>
+    </div>
+  </div>
+
+  <!-- 項目追加 -->
+  <div class="box">
+    <h3>項目追加</h3>
     <input type="text" id="textItem" placeholder="テキスト" />
     <button id="addTextBtn">追加</button><br><br>
-    <input type="file" id="imgInput" accept="image/*">
+    <input type="file" id="imgInput" accept="image/*" />
     <button id="addImgBtn">画像追加</button>
   </div>
 
+  <!-- 項目一覧 -->
+  <div class="box">
+    <h3>現在の項目</h3>
+    <div id="itemList"></div>
+  </div>
+
   <script>
-  // グローバル変数
-  const canvas = document.getElementById('wheelCanvas');
-  const ctx    = canvas.getContext('2d');
+    // ------------ localforageの初期化 ------------
+    localforage.config({ name: 'MyRouletteApp' });
+    const ITEMS_KEY = 'roulette_items';
 
-  // メモリ上で管理する items
-  // {type:'text', value:'りんご'} or {type:'image', value:'base64...', imageObj:Image, loaded:false}
-  let items = [];
+    // ------------ グローバル変数 ------------
+    // itemsの各要素:
+    //   { type:'text', value:'string' }
+    //   { type:'image', value:'base64string', imageObj:Image, loaded:boolean }
+    let items = [];
 
-  // localforageキー
-  const ITEMS_KEY = 'my_items';
+    // Canvas関連
+    const canvas  = document.getElementById('wheelCanvas');
+    const ctx     = canvas.getContext('2d');
+    let currentAngle = 0; // ルーレットの回転角度
 
-  // --- ロード時にIndexedDBから読み込み ---
-  window.onload = () => {
-    loadItemsFromDB().then(() => {
-      renderWheel();
-    });
-  };
+    // UI要素
+    const spinBtn     = document.getElementById('spinBtn');
+    const textItem    = document.getElementById('textItem');
+    const addTextBtn  = document.getElementById('addTextBtn');
+    const imgInput    = document.getElementById('imgInput');
+    const addImgBtn   = document.getElementById('addImgBtn');
+    const itemListDiv = document.getElementById('itemList');
 
-  // --- itemsの保存（imageObj除去）---
-  function saveItemsToDB() {
-    // DOMオブジェクトを除外
-    const storableItems = items.map(item => {
-      if (item.type === 'text') {
-        return { type:'text', value: item.value };
-      } else {
-        // 画像の場合、base64だけを保存
-        return { type:'image', value: item.value };
-      }
-    });
-    localforage.setItem(ITEMS_KEY, storableItems)
-      .catch(err => console.error('Failed to save items:', err));
-  }
+    // モーダル要素
+    const modalOverlay   = document.getElementById('modal-overlay');
+    const modalCloseBtn  = document.getElementById('modal-close-btn');
+    const modalContent   = document.getElementById('modal-content');
 
-  // --- itemsの読み込み（imageObjを再作成）---
-  function loadItemsFromDB() {
-    return localforage.getItem(ITEMS_KEY).then(storedItems => {
-      if (!storedItems) return;
-      items = storedItems.map(stored => {
-        if (stored.type === 'text') {
-          return { type:'text', value: stored.value };
+    // ------------ ページ読み込み時にIndexedDBから items をロード ------------
+    window.onload = () => {
+      loadItemsFromDB().then(() => {
+        renderItemList();
+        renderWheel();
+      });
+    };
+
+    // ------------ itemsの保存 (imageObjなどDOM参照を除外) ------------
+    function saveItemsToDB() {
+      const storable = items.map(it => {
+        if (it.type === 'text') {
+          return { type:'text', value: it.value };
         } else {
-          // imageObjを新規に生成
-          const img = new Image();
-          img.src   = stored.value;
-          const obj = { type:'image', value: stored.value, imageObj: img, loaded:false };
-          img.onload = () => { obj.loaded = true; renderWheel(); };
-          return obj;
+          // 画像の場合: base64文字列のみ保存
+          return { type:'image', value: it.value };
         }
       });
-    });
-  }
-
-  // --- ルーレットを描画 ---
-  let currentAngle = 0;
-  function renderWheel() {
-    const w = canvas.width;
-    const h = canvas.height;
-    const cx = w/2, cy = h/2;
-
-    ctx.clearRect(0, 0, w, h);
-
-    if (items.length === 0) {
-      ctx.textAlign = 'center';
-      ctx.font = '16px sans-serif';
-      ctx.fillText('項目がありません', cx, cy);
-      return;
+      localforage.setItem(ITEMS_KEY, storable)
+        .catch(err => console.error('Failed to save items:', err));
     }
 
-    const sliceAngle = 2*Math.PI / items.length;
-    const radius = Math.min(w, h)/2 - 10;
+    // ------------ itemsの読み込み (imageObjを再生成) ------------
+    function loadItemsFromDB() {
+      return localforage.getItem(ITEMS_KEY).then(storedItems => {
+        if (!storedItems) return;
+        items = storedItems.map(si => {
+          if (si.type === 'text') {
+            return { type:'text', value: si.value };
+          } else {
+            // 画像の場合
+            const img = new Image();
+            img.src   = si.value;
+            const obj = { type:'image', value: si.value, imageObj: img, loaded:false };
+            img.onload = () => {
+              obj.loaded = true;
+              renderWheel();
+            };
+            return obj;
+          }
+        });
+      });
+    }
 
-    for (let i=0; i<items.length; i++) {
-      const start = currentAngle + i* sliceAngle;
-      const end   = start + sliceAngle;
+    // ------------ 項目一覧の描画 ------------
+    function renderItemList() {
+      itemListDiv.innerHTML = '';
+      items.forEach((item, idx) => {
+        const row = document.createElement('div');
+        row.className = 'item-row';
+        if (item.type === 'text') {
+          row.textContent = item.value;
+        } else {
+          // 画像
+          const imgElem = document.createElement('img');
+          imgElem.src = item.value;
+          row.appendChild(imgElem);
+        }
 
-      ctx.beginPath();
-      ctx.moveTo(cx, cy);
-      ctx.arc(cx, cy, radius, start, end);
-      ctx.closePath();
-      // 適当な色
-      ctx.fillStyle = `hsl(${360/items.length * i}, 70%, 70%)`;
-      ctx.fill();
+        // 削除ボタン
+        const delBtn = document.createElement('button');
+        delBtn.textContent = '削除';
+        delBtn.onclick = () => {
+          items.splice(idx, 1);
+          renderItemList();
+          renderWheel();
+          saveItemsToDB();
+        };
+        row.appendChild(delBtn);
 
-      // 中心角度
-      const mid = start + sliceAngle/2;
+        itemListDiv.appendChild(row);
+      });
+    }
+
+    // ------------ ルーレット描画 ------------
+    function renderWheel() {
+      const w = canvas.width;
+      const h = canvas.height;
+      const cx = w/2, cy = h/2;
+
+      ctx.clearRect(0, 0, w, h);
+
+      if (items.length === 0) {
+        ctx.textAlign = 'center';
+        ctx.font = '16px sans-serif';
+        ctx.fillText('項目がありません', cx, cy);
+        return;
+      }
+
+      const sliceAngle = 2 * Math.PI / items.length;
+      const radius = Math.min(w, h)/2 - 10;
+
+      for (let i=0; i<items.length; i++) {
+        const start = currentAngle + i*sliceAngle;
+        const end   = start + sliceAngle;
+
+        // 扇形
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.arc(cx, cy, radius, start, end);
+        ctx.closePath();
+        ctx.fillStyle = `hsl(${(360/items.length)*i}, 70%, 70%)`;
+        ctx.fill();
+
+        // 中心角度
+        const mid = start + sliceAngle/2;
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(mid);
+
+        const drawR = radius - 50; // テキスト/画像の描画半径
+        const it = items[i];
+        if (it.type === 'text') {
+          ctx.font = '14px sans-serif';
+          ctx.fillStyle = '#000';
+          ctx.textAlign = 'left';
+          ctx.fillText(it.value, drawR, 0);
+        } else if (it.type === 'image' && it.imageObj) {
+          if (it.loaded) {
+            const imgW = 60, imgH = 60;
+            ctx.drawImage(it.imageObj, drawR - imgW/2, -imgH/2, imgW, imgH);
+          }
+        }
+        ctx.restore();
+      }
+
+      // 三角ポインタを描画 (円の上端より少し上に頂点を)
+      drawPointer();
+    }
+
+    // ------------ 三角ポインタをキャンバス上部に描画 ------------
+    function drawPointer() {
+      const w = canvas.width;
+      const h = canvas.height;
+      const cx = w/2, cy = h/2;
+      const radius = Math.min(w, h)/2 - 10;
+
+      // 頂点(少し上)
+      const apexX = cx;
+      const apexY = cy - radius - 5;
 
       ctx.save();
-      ctx.translate(cx, cy);
-      ctx.rotate(mid);
-
-      const item = items[i];
-      const drawR = radius - 50; // テキスト/画像の描画半径
-      if (item.type === 'text') {
-        ctx.textAlign = 'left';
-        ctx.font = '14px sans-serif';
-        ctx.fillStyle = '#000';
-        ctx.fillText(item.value, drawR, 0);
-      } else if (item.type === 'image' && item.imageObj) {
-        if (item.loaded) {
-          const imgW = 60, imgH = 60;
-          ctx.drawImage(item.imageObj, drawR - imgW/2, -imgH/2, imgW, imgH);
-        }
-      }
+      ctx.beginPath();
+      ctx.moveTo(apexX, apexY);            // 頂点
+      ctx.lineTo(apexX - 10, apexY + 20);  // 左下
+      ctx.lineTo(apexX + 10, apexY + 20);  // 右下
+      ctx.closePath();
+      ctx.fillStyle = 'red';
+      ctx.fill();
       ctx.restore();
     }
 
-    // 三角ポインタ
-    drawPointer();
-  }
-
-  function drawPointer() {
-    const w = canvas.width;
-    const h = canvas.height;
-    const cx = w/2, cy = h/2;
-    const radius = Math.min(w, h)/2 - 10;
-
-    // 頂点(円の上端よりさらに5px上)
-    const apexX = cx;
-    const apexY = cy - radius - 5;
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(apexX, apexY);           // 頂点
-    ctx.lineTo(apexX - 10, apexY + 20); // 左下
-    ctx.lineTo(apexX + 10, apexY + 20); // 右下
-    ctx.closePath();
-    ctx.fillStyle = 'red';
-    ctx.fill();
-    ctx.restore();
-  }
-
-  // --- スピン ---
-  document.getElementById('spinBtn').addEventListener('click', () => {
-    if (items.length === 0) {
-      alert('項目がありません');
-      return;
-    }
-    startSpin();
-  });
-
-  function startSpin() {
-    const totalSpins   = 5 + Math.floor(Math.random()*5);
-    const randomFactor = Math.random();
-    const targetAngle  = 2*Math.PI*totalSpins + 2*Math.PI*randomFactor;
-
-    let startTime = null;
-    const duration = 3000;
-
-    function animate(t) {
-      if (!startTime) startTime = t;
-      const elapsed = t - startTime;
-      const progress = Math.min(elapsed/duration, 1);
-      const easeOut  = 1 - Math.pow(1 - progress, 3);
-
-      currentAngle = easeOut * targetAngle;
-      renderWheel();
-
-      if (progress < 1) {
-        requestAnimationFrame(animate);
-      } else {
-        finishSpin(targetAngle);
+    // ------------ スピン ------------
+    spinBtn.addEventListener('click', () => {
+      if (items.length === 0) {
+        alert('項目がありません。');
+        return;
       }
-    }
-    requestAnimationFrame(animate);
-  }
+      startSpin();
+    });
 
-  function finishSpin(finalAngle) {
-    const sliceAngle = 2*Math.PI / items.length;
-    const normalized = finalAngle % (2*Math.PI);
-    const idx = Math.floor(((2*Math.PI - normalized + sliceAngle/2) % (2*Math.PI)) / sliceAngle);
+    function startSpin() {
+      const totalSpins   = 5 + Math.floor(Math.random()*5);
+      const randomFactor = Math.random();
+      const targetAngle  = 2*Math.PI * totalSpins + 2*Math.PI * randomFactor;
 
-    // 当選結果
-    const winItem = items[idx];
-    alert('当選: ' + (winItem.type==='text' ? winItem.value : '画像'));
+      let startTime = null;
+      const duration = 3000; // 3秒
 
-    // ここで履歴を保存したい場合は別途実装
-  }
+      function animate(t) {
+        if (!startTime) startTime = t;
+        const elapsed = t - startTime;
+        const progress = Math.min(elapsed/duration, 1);
+        const easeOut  = 1 - Math.pow(1 - progress, 3); // キュービック
 
-  // --- 項目追加 ---
-  document.getElementById('addTextBtn').addEventListener('click', () => {
-    const val = document.getElementById('textItem').value.trim();
-    if (!val) return;
-    items.push({ type:'text', value: val });
-    document.getElementById('textItem').value = '';
-    renderWheel();
-    saveItemsToDB();
-  });
-
-  document.getElementById('addImgBtn').addEventListener('click', () => {
-    const fileInput = document.getElementById('imgInput');
-    if (!fileInput.files || !fileInput.files[0]) return;
-
-    const file = fileInput.files[0];
-    const reader = new FileReader();
-    reader.onload = e => {
-      const base64 = e.target.result;
-      // 画像itemを作成 (imageObjは保存しない)
-      const img = new Image();
-      img.src = base64;
-      const itemObj = { type:'image', value: base64, imageObj: img, loaded:false };
-      img.onload = () => {
-        itemObj.loaded = true;
+        currentAngle = easeOut * targetAngle;
         renderWheel();
-      };
-      items.push(itemObj);
+
+        if (progress < 1) {
+          requestAnimationFrame(animate);
+        } else {
+          finishSpin(targetAngle);
+        }
+      }
+      requestAnimationFrame(animate);
+    }
+
+    function finishSpin(finalAngle) {
+      // 当選項目を特定
+      const sliceAngle = 2*Math.PI / items.length;
+      const normalized = finalAngle % (2*Math.PI);
+      const index = Math.floor(((2*Math.PI - normalized + sliceAngle/2) % (2*Math.PI)) / sliceAngle);
+
+      const resultItem = items[index];
+
+      // モーダルで当選結果を表示
+      showResultModal(resultItem);
+    }
+
+    // ------------ モーダルで結果表示 ------------
+    function showResultModal(item) {
+      modalContent.innerHTML = ''; // 一旦クリア
+
+      if (item.type === 'text') {
+        const p = document.createElement('p');
+        p.textContent = `当選: ${item.value}`;
+        modalContent.appendChild(p);
+      } else {
+        // 画像
+        const p = document.createElement('p');
+        p.textContent = '当選（画像）';
+        const img = document.createElement('img');
+        img.src = item.value;
+        modalContent.appendChild(p);
+        modalContent.appendChild(img);
+      }
+
+      // モーダルを表示
+      modalOverlay.style.display = 'flex';
+    }
+    // モーダルを閉じる
+    modalCloseBtn.addEventListener('click', () => {
+      modalOverlay.style.display = 'none';
+    });
+
+    // ------------ 項目追加(テキスト) ------------
+    addTextBtn.addEventListener('click', () => {
+      const val = textItem.value.trim();
+      if (!val) return;
+      items.push({ type:'text', value:val });
+      textItem.value = '';
+
+      renderItemList();
+      renderWheel();
       saveItemsToDB();
-    };
-    reader.readAsDataURL(file);
-    fileInput.value = '';
-  });
+    });
+
+    // ------------ 項目追加(画像) ------------
+    addImgBtn.addEventListener('click', () => {
+      if (!imgInput.files || !imgInput.files[0]) return;
+      const file = imgInput.files[0];
+      const reader = new FileReader();
+      reader.onload = e => {
+        const base64 = e.target.result;
+        const img = new Image();
+        img.src = base64;
+
+        const newItem = { type:'image', value: base64, imageObj: img, loaded:false };
+        img.onload = () => {
+          newItem.loaded = true;
+          renderWheel();
+        };
+        items.push(newItem);
+
+        renderItemList();
+        saveItemsToDB();
+      };
+      reader.readAsDataURL(file);
+      imgInput.value = '';
+    });
   </script>
 </body>
 </html>
