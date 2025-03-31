@@ -278,22 +278,15 @@
   //   スピン終了処理
   // ======================
   function finishSpin(finalAngle) {
-    // スライスあたりの角度
     const sliceAngle = 2 * Math.PI / items.length;
-    // 0～2πの範囲に正規化
+    const pointerAngle = 3 * Math.PI / 2; // 上向き
     const normalized = finalAngle % (2 * Math.PI);
   
-    // Canvas標準では
-    //   0ラジアン = 右,  π/2 = 下, π = 左, 3π/2 = 上
-    // 「上向き」が 3π/2 なので、そこを 0 扱いに合わせる。
-    // → measure = (normalized - 3π/2 + 2π) % 2π
-    const measure = (normalized - (3 * Math.PI) / 2 + 2 * Math.PI) % (2 * Math.PI);
+    const diff = (pointerAngle - normalized + 2 * Math.PI) % (2 * Math.PI);
+    const index = Math.floor(diff / sliceAngle) % items.length;
   
-    // sliceAngle/2 を足すことで、区切りの中央で判定
-    const index = Math.floor((measure + sliceAngle / 2) / sliceAngle);
-  
-    // 当選アイテムを取得
     const resultItem = items[index];
+    const now = new Date().toLocaleString();
     
     console.log("sliceAngle=",sliceAngle, ", normalized=",normalized, ", measure=", measure, ", index=",index);
     
