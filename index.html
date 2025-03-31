@@ -266,26 +266,40 @@
   }
 
   // --- finishSpin: ポインタを「上」にする ---
-  function finishSpin(finalAngle) {
-    const sliceAngle = 2*Math.PI / items.length;
-    const normalized = finalAngle % (2*Math.PI);
+function finishSpin(finalAngle) {
+  // 1スライスあたりのラジアン幅
+  const sliceAngle = 2 * Math.PI / items.length;
 
-    // angle=0 は「右」向きがデフォルト
-    // しかし我々のポインタは「上」なので、-π/2 シフトして数え上げる
-    const measure = (normalized - Math.PI/2 + 2*Math.PI) % (2*Math.PI);
-    // sliceAngle/2 を足して "区切りの中間" で切り上げる
-    const index = Math.floor((measure + sliceAngle/2) / sliceAngle);
+  // finalAngle を 0～2π の範囲に正規化
+  const normalized = finalAngle % (2 * Math.PI);
 
-    const resultItem = items[index];
-    // 当選履歴保存
-    const now = new Date().toLocaleString();
-    historyData.unshift({ time: now, type: resultItem.type, value: resultItem.value });
-    renderHistory();
-    saveHistoryToDB();
+  // angle=0 は Canvas 的には「右」向き。
+  // しかし本当に「上向き」を基準（0ラジアン）にしたい場合、
+  // 「上向き = 3π/2」だったものを 0 に合わせる → 実質的に +π/2 シフトする。
+  const measure = (normalized + Math.PI / 2) % (2 * Math.PI);
 
-    // モーダル表示
-    showResultModal(resultItem);
-  }
+  // sliceAngle/2 を足して "スライスの区切りの真ん中" で判定
+  const index = Math.floor((measure + sliceAngle / 2) / sliceAngle);
+
+  // 当選アイテムを取り出し
+  const resultItem = items[index];
+
+  // 当選履歴に保存
+  const now = new Date().toLocaleString();
+  historyData.unshift({
+    time: now,
+    type: resultItem.type,
+    value: resultItem.value
+  });
+
+  // 画面に反映 + DB保存
+  renderHistory();
+  saveHistoryToDB();
+
+  // モーダルで結果表示
+  showResultModal(resultItem);
+}
+
 
   // ======================
   //    当選履歴 + モーダル
